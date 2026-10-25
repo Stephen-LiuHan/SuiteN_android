@@ -38,6 +38,8 @@ class BookViewModel(
                     _books.value = bookList
                 }
             } catch (e: Exception) {
+                // Database errors (e.g. a failed migration) would otherwise only show as an empty shelf
+                android.util.Log.e("BookViewModel", "Failed to load books", e)
                 _error.value = e.message
             } finally {
                 _isLoading.value = false
