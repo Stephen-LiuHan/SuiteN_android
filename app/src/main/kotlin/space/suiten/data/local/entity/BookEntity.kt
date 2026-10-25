@@ -18,7 +18,13 @@ data class BookEntity(
     val url: String? = null,
     val memo: String? = null,
     val createdAt: Long,
-    val updatedAt: Long
+    val updatedAt: Long,
+    val summaryGeneratedAt: Long? = null,
+    val summarySavedAt: Long? = null,
+    val summaryEditedAt: Long? = null,
+    val summaryHelpfulness: Int? = null,
+    val summaryCaptureCount: Int? = null,
+    val summaryCompletedAt: Long? = null
 ) {
     fun toDomain(): Book = Book(
         id = id,
@@ -30,7 +36,13 @@ data class BookEntity(
         url = url,
         memo = memo,
         createdAt = Date(createdAt),
-        updatedAt = Date(updatedAt)
+        updatedAt = Date(updatedAt),
+        summaryGeneratedAt = summaryGeneratedAt?.let { Date(it) },
+        summarySavedAt = summarySavedAt?.let { Date(it) },
+        summaryEditedAt = summaryEditedAt?.let { Date(it) },
+        summaryHelpfulness = summaryHelpfulness,
+        summaryCaptureCount = summaryCaptureCount,
+        summaryCompletedAt = summaryCompletedAt?.let { Date(it) }
     )
 
     companion object {
@@ -44,7 +56,13 @@ data class BookEntity(
             url = book.url,
             memo = book.memo,
             createdAt = book.createdAt.time,
-            updatedAt = book.updatedAt.time
+            updatedAt = book.updatedAt.time,
+            summaryGeneratedAt = book.summaryGeneratedAt?.time,
+            summarySavedAt = book.summarySavedAt?.time,
+            summaryEditedAt = book.summaryEditedAt?.time,
+            summaryHelpfulness = book.summaryHelpfulness,
+            summaryCaptureCount = book.summaryCaptureCount,
+            summaryCompletedAt = book.summaryCompletedAt?.time
         )
     }
 }

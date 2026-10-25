@@ -1,0 +1,18 @@
+# Local configuration (contains SDK path and API keys)
+local.properties
+
+# Gradle / build outputs
+.gradle/
+build/
+app/build/
+captures/
+.externalNativeBuild/
+.cxx/
+
+# IDE
+.idea/*
+!.idea/.gitignore
+*.iml
+
+# OS
+.DS_Store

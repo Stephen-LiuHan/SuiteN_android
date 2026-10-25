@@ -1,5 +1,6 @@
 package space.suiten.presentation.screens
 
+import space.suiten.domain.model.EmotionStamps
 import android.net.Uri
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -288,8 +289,13 @@ private fun EmotionMemoCard(
                 )
                 if (emotion != null) {
                     Text(
-                        text = emotion,
+                        text = EmotionStamps.display(emotion),
                         fontSize = 32.sp
+                    )
+                    Text(
+                        text = EmotionStamps.labels(emotion),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 } else {
                     Text(

@@ -22,7 +22,14 @@ data class Book(
     val url: String? = null,
     val memo: String? = null,
     val createdAt: Date,
-    val updatedAt: Date
+    val updatedAt: Date,
+    // Book-level summary metrics (see BookSummaryActions)
+    val summaryGeneratedAt: Date? = null,
+    val summarySavedAt: Date? = null,
+    val summaryEditedAt: Date? = null,
+    val summaryHelpfulness: Int? = null,
+    val summaryCaptureCount: Int? = null,
+    val summaryCompletedAt: Date? = null
 ) {
     /**
      * Get display name for content type

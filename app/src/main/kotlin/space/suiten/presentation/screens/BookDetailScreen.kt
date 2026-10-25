@@ -1,5 +1,6 @@
 package space.suiten.presentation.screens
 
+import space.suiten.domain.model.EmotionStamps
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -31,6 +32,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import space.suiten.domain.model.Book
+import space.suiten.domain.model.BookSummaryActions
 import space.suiten.domain.model.Capture
 import space.suiten.domain.model.AIStatus
 
@@ -39,12 +41,15 @@ import space.suiten.domain.model.AIStatus
 fun BookDetailScreen(
     book: Book?,
     captures: List<Capture>,
-    bookSummary: String?,
     isGeneratingSummary: Boolean,
+    summaryError: String?,
     onBack: () -> Unit,
     onCaptureClick: (String) -> Unit,
     onAddCapture: () -> Unit,
     onGenerateSummary: () -> Unit,
+    onSaveSummary: () -> Unit,
+    onEditSummary: (String) -> Unit,
+    onRateSummary: (Int) -> Unit,
     onEditBook: () -> Unit
 ) {
     Scaffold(
@@ -169,10 +174,14 @@ fun BookDetailScreen(
             // Book Summary Section
             item {
                 BookSummarySection(
-                    summary = bookSummary,
+                    book = book,
                     isGenerating = isGeneratingSummary,
-                    hasCaptures = captures.isNotEmpty(),
-                    onGenerateSummary = onGenerateSummary
+                    error = summaryError,
+                    captureCount = captures.size,
+                    onGenerateSummary = onGenerateSummary,
+                    onSaveSummary = onSaveSummary,
+                    onEditSummary = onEditSummary,
+                    onRateSummary = onRateSummary
                 )
             }
 
@@ -264,7 +273,7 @@ private fun CaptureListItem(
             // Emotion
             if (capture.emotion != null) {
                 Text(
-                    text = capture.emotion,
+                    text = EmotionStamps.display(capture.emotion),
                     fontSize = 24.sp,
                     modifier = Modifier.padding(end = 12.dp)
                 )
@@ -308,13 +317,34 @@ private fun StatusBadge(status: AIStatus) {
 }
 
 @Composable
+private fun StatusChip(text: String, containerColor: androidx.compose.ui.graphics.Color, contentColor: androidx.compose.ui.graphics.Color) {
+    Surface(
+        shape = RoundedCornerShape(16.dp),
+        color = containerColor
+    ) {
+        Text(
+            text = text,
+            style = MaterialTheme.typography.labelSmall,
+            color = contentColor,
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+        )
+    }
+}
+
+@Composable
 private fun BookSummarySection(
-    summary: String?,
+    book: Book?,
     isGenerating: Boolean,
-    hasCaptures: Boolean,
-    onGenerateSummary: () -> Unit
+    error: String?,
+    captureCount: Int,
+    onGenerateSummary: () -> Unit,
+    onSaveSummary: () -> Unit,
+    onEditSummary: (String) -> Unit,
+    onRateSummary: (Int) -> Unit
 ) {
-    var isExpanded by remember { mutableStateOf(false) }
+    val summary = book?.summary
+    var isExpanded by remember { mutableStateOf(true) }
+    var isEditing by remember { mutableStateOf(false) }
 
     Card(
         modifier = Modifier
@@ -347,10 +377,13 @@ private fun BookSummarySection(
                         tint = MaterialTheme.colorScheme.primary
                     )
                     Text(
-                        text = "読書感想",
+                        text = "この本のまとめ",
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.Bold
                     )
+                    if (book?.summaryCompletedAt != null) {
+                        StatusChip(text = "完成", containerColor = MaterialTheme.colorScheme.primary, contentColor = MaterialTheme.colorScheme.onPrimary)
+                    }
                 }
                 Icon(
                     imageVector = if (isExpanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
@@ -364,6 +397,13 @@ private fun BookSummarySection(
                 Column(
                     verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
+                    if (error != null) {
+                        Text(
+                            text = error,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error
+                        )
+                    }
                     when {
                         isGenerating -> {
                             Row(
@@ -377,33 +417,57 @@ private fun BookSummarySection(
                                 )
                                 Spacer(modifier = Modifier.width(12.dp))
                                 Text(
-                                    text = "読書感想を生成中...",
+                                    text = "キャプチャを横断してまとめています...",
                                     style = MaterialTheme.typography.bodyMedium
                                 )
                             }
                         }
-                        summary != null -> {
+                        summary != null && book != null -> {
                             Text(
                                 text = summary,
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = MaterialTheme.colorScheme.onSurface
                             )
-                            OutlinedButton(
-                                onClick = onGenerateSummary,
-                                modifier = Modifier.align(Alignment.End)
+                            SummaryRating(
+                                selected = book.summaryHelpfulness,
+                                onRate = onRateSummary
+                            )
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End),
+                                verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Icon(
-                                    Icons.Default.AutoAwesome,
-                                    contentDescription = null,
-                                    modifier = Modifier.size(18.dp)
+                                TextButton(onClick = onGenerateSummary) {
+                                    Text("作り直す")
+                                }
+                                OutlinedButton(onClick = { isEditing = true }) {
+                                    Icon(Icons.Default.Edit, contentDescription = null, modifier = Modifier.size(18.dp))
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text("編集")
+                                }
+                                if (book.summarySavedAt == null) {
+                                    Button(onClick = onSaveSummary) {
+                                        Text("保存する")
+                                    }
+                                } else {
+                                    Text(
+                                        text = "保存済み",
+                                        style = MaterialTheme.typography.labelMedium,
+                                        color = MaterialTheme.colorScheme.primary
+                                    )
+                                }
+                            }
+                            if ((book.summaryCaptureCount ?: 0) < BookSummaryActions.MIN_CAPTURES) {
+                                Text(
+                                    text = "キャプチャが${BookSummaryActions.MIN_CAPTURES}件以上あると、疑問と共感が並んで、考え方が見えやすくなります。",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
-                                Spacer(modifier = Modifier.width(4.dp))
-                                Text("再生成")
                             }
                         }
-                        hasCaptures -> {
+                        captureCount > 0 -> {
                             Text(
-                                text = "キャプチャを基に、この本を読んだ感想をAIがまとめます。",
+                                text = "${captureCount}件のキャプチャを横断して、この本を通したあなたの読み方をAIがまとめます。",
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -417,12 +481,12 @@ private fun BookSummarySection(
                                     modifier = Modifier.size(18.dp)
                                 )
                                 Spacer(modifier = Modifier.width(8.dp))
-                                Text("読書感想を生成")
+                                Text("この本をまとめる")
                             }
                         }
                         else -> {
                             Text(
-                                text = "キャプチャを追加すると、この本を読んだ感想をAIがまとめます。",
+                                text = "キャプチャを追加すると、一冊を通したあなたの読み方をAIがまとめます。",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -432,4 +496,77 @@ private fun BookSummarySection(
             }
         }
     }
+
+    if (isEditing && summary != null) {
+        EditSummaryDialog(
+            initial = summary,
+            onDismiss = { isEditing = false },
+            onConfirm = { text ->
+                onEditSummary(text)
+                isEditing = false
+            }
+        )
+    }
+}
+
+private val summaryRatings = listOf(1 to "いまいち", 2 to "まあまあ", 3 to "とても")
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun SummaryRating(
+    selected: Int?,
+    onRate: (Int) -> Unit
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Text(
+            text = "このまとめは役に立ちましたか？",
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            summaryRatings.forEach { (value, label) ->
+                FilterChip(
+                    selected = selected == value,
+                    onClick = { onRate(value) },
+                    label = { Text(label) }
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun EditSummaryDialog(
+    initial: String,
+    onDismiss: () -> Unit,
+    onConfirm: (String) -> Unit
+) {
+    var text by remember { mutableStateOf(initial) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("まとめを編集") },
+        text = {
+            OutlinedTextField(
+                value = text,
+                onValueChange = { text = it },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = 160.dp),
+                textStyle = MaterialTheme.typography.bodyMedium
+            )
+        },
+        confirmButton = {
+            TextButton(
+                onClick = { onConfirm(text.trim()) },
+                enabled = text.isNotBlank()
+            ) {
+                Text("保存する")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("キャンセル")
+            }
+        }
+    )
 }

@@ -1,5 +1,6 @@
 package space.suiten.presentation.screens
 
+import space.suiten.domain.model.EmotionStamps
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -164,7 +165,7 @@ private fun PendingCaptureCard(
         ) {
             if (capture.emotion != null) {
                 Text(
-                    text = capture.emotion,
+                    text = EmotionStamps.display(capture.emotion),
                     style = MaterialTheme.typography.headlineSmall,
                     modifier = Modifier.padding(end = 12.dp)
                 )

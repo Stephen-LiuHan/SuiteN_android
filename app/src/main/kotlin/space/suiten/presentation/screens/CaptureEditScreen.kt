@@ -1,5 +1,6 @@
 package space.suiten.presentation.screens
 
+import space.suiten.domain.model.EmotionStamps
 import android.Manifest
 import android.app.Activity
 import android.content.Context
@@ -217,12 +218,7 @@ fun CaptureEditScreen(
         }
     }
 
-    val emotions = listOf(
-        EmotionOption("💡", "ひらめき"),
-        EmotionOption("🤔", "疑問"),
-        EmotionOption("⚠️", "注意"),
-        EmotionOption("🔥", "重要")
-    )
+    val emotions = EmotionStamps.ALL.map { EmotionOption(it.emoji, it.label) }
 
     val canSubmit = selectedEmotions.isNotEmpty() || memo.isNotBlank()
 

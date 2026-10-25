@@ -1,5 +1,9 @@
 package space.suiten.presentation.viewmodel
 
+import space.suiten.core.service.AIPrompts
+import space.suiten.core.service.BookSummaryCaptureInput
+import space.suiten.domain.model.Capture
+import space.suiten.domain.model.EmotionStamps
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import space.suiten.core.service.AIService
@@ -257,18 +261,26 @@ class AIViewModel(
         bookTitle: String,
         contentTypeName: String,
         bookMemo: String?,
-        captureIds: List<String>
-    ): String {
+        captures: List<Capture>
+    ): String? {
         return try {
-            // Collect AI results for all captures
-            val aiResults = captureIds.mapNotNull { captureId ->
-                aiRepository.getResultByCaptureId(captureId)
+            // The reader's own data from each capture, in reading order. Never book text.
+            val inputs = captures.sortedBy { it.createdAt }.map { capture ->
+                val result = aiRepository.getResultByCaptureId(capture.id)
+                BookSummaryCaptureInput(
+                    emotionLabels = EmotionStamps.labels(capture.emotion),
+                    memo = capture.userMemo,
+                    reaction = result?.draftSummary,
+                    axisLabel = AIPrompts.axisLabel(result?.axisSelected),
+                    topicTags = result?.topicTags ?: emptyList()
+                )
             }
 
-            aiService.generateBookSummary(bookTitle, contentTypeName, bookMemo, aiResults)
+            aiService.generateBookSummary(bookTitle, contentTypeName, bookMemo, inputs)
         } catch (e: Exception) {
             android.util.Log.e("AIViewModel", "Failed to generate summary: ${e.message}")
-            "感想の生成に失敗しました: ${e.message}"
+            // Returning null keeps a failure message from being saved as the reader's summary
+            null
         }
     }
 }

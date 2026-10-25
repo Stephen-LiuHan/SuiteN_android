@@ -4,6 +4,8 @@ import android.content.Context
 import androidx.room.Database
 import androidx.room.Room
 import androidx.room.RoomDatabase
+import androidx.room.migration.Migration
+import androidx.sqlite.db.SupportSQLiteDatabase
 import space.suiten.data.local.dao.*
 import space.suiten.data.local.entity.*
 
@@ -26,7 +28,7 @@ import space.suiten.data.local.entity.*
         ActionLogEntity::class,
         UserProfileEntity::class
     ],
-    version = 3,
+    version = 4,
     exportSchema = false
 )
 abstract class SuiteNDatabase : RoomDatabase() {
@@ -42,6 +44,22 @@ abstract class SuiteNDatabase : RoomDatabase() {
         @Volatile
         private var INSTANCE: SuiteNDatabase? = null
 
+        /** Adds book-level summary metrics for the North Star Metric. */
+        val MIGRATION_3_4 = object : Migration(3, 4) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                listOf(
+                    "summaryGeneratedAt INTEGER",
+                    "summarySavedAt INTEGER",
+                    "summaryEditedAt INTEGER",
+                    "summaryHelpfulness INTEGER",
+                    "summaryCaptureCount INTEGER",
+                    "summaryCompletedAt INTEGER"
+                ).forEach { column ->
+                    db.execSQL("ALTER TABLE books ADD COLUMN $column")
+                }
+            }
+        }
+
         fun getDatabase(context: Context): SuiteNDatabase {
             return INSTANCE ?: synchronized(this) {
                 val instance = Room.databaseBuilder(
@@ -49,6 +67,7 @@ abstract class SuiteNDatabase : RoomDatabase() {
                     SuiteNDatabase::class.java,
                     "suiten.db"
                 )
+                    .addMigrations(MIGRATION_3_4)
                     .fallbackToDestructiveMigration()
                     .build()
                 INSTANCE = instance

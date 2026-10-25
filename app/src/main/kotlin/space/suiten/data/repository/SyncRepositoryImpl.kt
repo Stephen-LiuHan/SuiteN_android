@@ -95,7 +95,8 @@ class SyncRepositoryImpl(
     }
 
     private suspend fun collectLocalChanges(lastSyncAt: Long?): SyncChanges {
-        val sinceTimestamp = lastSyncAt ?: 0L
+        // lastSyncAt is the server timestamp (seconds); local rows use milliseconds
+        val sinceTimestamp = SyncTime.fromApi(lastSyncAt) ?: 0L
 
         return SyncChanges(
             books = collectBookChanges(sinceTimestamp),
@@ -124,8 +125,13 @@ class SyncRepositoryImpl(
                     title = book.title,
                     author = book.author,
                     summary = book.summary,
-                    createdAt = book.createdAt,
-                    updatedAt = book.updatedAt
+                    createdAt = SyncTime.toApi(book.createdAt),
+                    updatedAt = SyncTime.toApi(book.updatedAt),
+                    summaryGeneratedAt = SyncTime.toApi(book.summaryGeneratedAt),
+                    summarySavedAt = SyncTime.toApi(book.summarySavedAt),
+                    summaryEditedAt = SyncTime.toApi(book.summaryEditedAt),
+                    summaryHelpfulness = book.summaryHelpfulness,
+                    summaryCaptureCount = book.summaryCaptureCount
                 )
             )
         }
@@ -144,11 +150,11 @@ class SyncRepositoryImpl(
                 action = "upsert",
                 data = ReadingSessionSyncData(
                     bookId = session.bookId,
-                    startedAt = session.startedAt,
-                    endedAt = session.endedAt,
+                    startedAt = SyncTime.toApi(session.startedAt),
+                    endedAt = SyncTime.toApi(session.endedAt),
                     note = session.note,
-                    createdAt = session.createdAt,
-                    updatedAt = session.updatedAt
+                    createdAt = SyncTime.toApi(session.createdAt),
+                    updatedAt = SyncTime.toApi(session.updatedAt)
                 )
             )
         }
@@ -170,8 +176,8 @@ class SyncRepositoryImpl(
                     emotion = capture.emotion,
                     userMemo = capture.userMemo,
                     aiStatus = capture.aiStatus,
-                    createdAt = capture.createdAt,
-                    updatedAt = capture.updatedAt
+                    createdAt = SyncTime.toApi(capture.createdAt),
+                    updatedAt = SyncTime.toApi(capture.updatedAt)
                 )
             )
         }
@@ -203,8 +209,8 @@ class SyncRepositoryImpl(
                     deepeningQuestion = result.deepeningQuestion,
                     axisSelected = result.axisSelected,
                     topicTags = topicTags,
-                    createdAt = result.createdAt,
-                    updatedAt = result.updatedAt
+                    createdAt = SyncTime.toApi(result.createdAt),
+                    updatedAt = SyncTime.toApi(result.updatedAt)
                 )
             )
         }
@@ -224,7 +230,7 @@ class SyncRepositoryImpl(
                 data = FeedbackLogSyncData(
                     captureId = feedback.captureId,
                     helpfulness = feedback.helpfulness,
-                    createdAt = feedback.createdAt
+                    createdAt = SyncTime.toApi(feedback.createdAt)
                 )
             )
         }
@@ -267,14 +273,22 @@ class SyncRepositoryImpl(
     private suspend fun applyServerChanges(changes: SyncChangesResponse) {
         // Apply books
         changes.books?.forEach { book ->
+            // Keep fields the server doesn't store (content type, URL, memo)
+            val base = database.bookDao().getBookById(book.id)
+                ?: BookEntity(id = book.id, title = book.title, author = null, summary = null, createdAt = 0, updatedAt = 0)
             database.bookDao().insertBook(
-                BookEntity(
-                    id = book.id,
+                base.copy(
                     title = book.title,
                     author = book.author,
                     summary = book.summary,
-                    createdAt = book.createdAt,
-                    updatedAt = book.updatedAt
+                    createdAt = SyncTime.fromApi(book.createdAt),
+                    updatedAt = SyncTime.fromApi(book.updatedAt),
+                    summaryGeneratedAt = SyncTime.fromApi(book.summaryGeneratedAt),
+                    summarySavedAt = SyncTime.fromApi(book.summarySavedAt),
+                    summaryEditedAt = SyncTime.fromApi(book.summaryEditedAt),
+                    summaryHelpfulness = book.summaryHelpfulness,
+                    summaryCaptureCount = book.summaryCaptureCount,
+                    summaryCompletedAt = SyncTime.fromApi(book.summaryCompletedAt) ?: base.summaryCompletedAt
                 )
             )
         }
@@ -285,11 +299,11 @@ class SyncRepositoryImpl(
                 ReadingSessionEntity(
                     id = session.id,
                     bookId = session.bookId,
-                    startedAt = session.startedAt,
-                    endedAt = session.endedAt,
+                    startedAt = SyncTime.fromApi(session.startedAt),
+                    endedAt = SyncTime.fromApi(session.endedAt),
                     note = session.note,
-                    createdAt = session.createdAt,
-                    updatedAt = session.updatedAt
+                    createdAt = SyncTime.fromApi(session.createdAt),
+                    updatedAt = SyncTime.fromApi(session.updatedAt)
                 )
             )
         }
@@ -304,8 +318,8 @@ class SyncRepositoryImpl(
                     emotion = capture.emotion,
                     userMemo = capture.userMemo,
                     aiStatus = capture.aiStatus,
-                    createdAt = capture.createdAt,
-                    updatedAt = capture.updatedAt
+                    createdAt = SyncTime.fromApi(capture.createdAt),
+                    updatedAt = SyncTime.fromApi(capture.updatedAt)
                 )
                 database.captureDao().updateCapture(updatedCapture)
             } else {
@@ -318,8 +332,8 @@ class SyncRepositoryImpl(
                         emotion = capture.emotion,
                         userMemo = capture.userMemo,
                         aiStatus = capture.aiStatus,
-                        createdAt = capture.createdAt,
-                        updatedAt = capture.updatedAt
+                        createdAt = SyncTime.fromApi(capture.createdAt),
+                        updatedAt = SyncTime.fromApi(capture.updatedAt)
                     )
                 )
             }
@@ -335,8 +349,8 @@ class SyncRepositoryImpl(
                     deepeningQuestion = aiResult.deepeningQuestion,
                     axisSelected = aiResult.axisSelected,
                     topicTagsJson = com.google.gson.Gson().toJson(aiResult.topicTags),
-                    createdAt = aiResult.createdAt,
-                    updatedAt = aiResult.updatedAt
+                    createdAt = SyncTime.fromApi(aiResult.createdAt),
+                    updatedAt = SyncTime.fromApi(aiResult.updatedAt)
                 )
             )
         }
@@ -364,7 +378,7 @@ class SyncRepositoryImpl(
                     id = feedbackLog.id,
                     captureId = feedbackLog.captureId,
                     helpfulness = feedbackLog.helpfulness,
-                    createdAt = feedbackLog.createdAt
+                    createdAt = SyncTime.fromApi(feedbackLog.createdAt)
                 )
             )
         }

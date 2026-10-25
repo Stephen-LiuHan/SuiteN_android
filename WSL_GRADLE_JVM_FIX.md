@@ -14,9 +14,10 @@ Use the JDK installed on the same WSL distribution.
 
 ## ✅ 解決方法
 
-### 方法1: gradle.propertiesで設定（推奨・自動適用）
+### 方法1: ユーザーの gradle.properties で設定（推奨）
 
-すでに `gradle.properties` に以下の設定を追加済みです：
+JDK のパスはマシンごとに違うため、プロジェクトの `gradle.properties` には書きません（CI や他の環境でビルドできなくなるため）。
+`~/.gradle/gradle.properties` に以下を追加してください：
 
 ```properties
 # WSL JDK path

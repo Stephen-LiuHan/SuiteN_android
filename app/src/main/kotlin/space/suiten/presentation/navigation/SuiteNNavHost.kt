@@ -188,8 +188,8 @@ fun SuiteNNavHost(
                 val books by bookViewModel.books.collectAsState()
                 val book = books.find { it.id == bookId }
                 val captures by captureViewModel.captures.collectAsState()
-                var bookSummary by remember { mutableStateOf<String?>(null) }
                 var isGeneratingSummary by remember { mutableStateOf(false) }
+                var summaryError by remember { mutableStateOf<String?>(null) }
                 var showEditDialog by remember { mutableStateOf(false) }
                 val coroutineScope = rememberCoroutineScope()
 
@@ -197,16 +197,11 @@ fun SuiteNNavHost(
                     captureViewModel.loadCapturesByBook(bookId)
                 }
 
-                // Load existing summary from book if available
-                LaunchedEffect(book) {
-                    bookSummary = book?.summary
-                }
-
                 BookDetailScreen(
                     book = book,
                     captures = captures,
-                    bookSummary = bookSummary,
                     isGeneratingSummary = isGeneratingSummary,
+                    summaryError = summaryError,
                     onBack = { navController.popBackStack() },
                     onCaptureClick = { captureId ->
                         navController.navigate(Screen.CaptureDetail.createRoute(captureId))
@@ -214,26 +209,28 @@ fun SuiteNNavHost(
                     onAddCapture = {
                         navController.navigate(Screen.CaptureEdit.createRoute(bookId))
                     },
-                    onGenerateSummary = {
+                    onGenerateSummary = generate@{
+                        val currentBook = book ?: return@generate
                         coroutineScope.launch {
                             isGeneratingSummary = true
-                            val captureIds = captures.map { it.id }
+                            summaryError = null
                             val summary = aiViewModel.generateBookSummary(
-                                bookTitle = book?.title ?: "",
-                                contentTypeName = book?.getTypeDisplayName() ?: "本",
-                                bookMemo = book?.memo,
-                                captureIds = captureIds
+                                bookTitle = currentBook.title,
+                                contentTypeName = currentBook.getTypeDisplayName(),
+                                bookMemo = currentBook.memo,
+                                captures = captures
                             )
-                            bookSummary = summary
-
-                            // Save summary to book
-                            book?.let { currentBook ->
-                                val updatedBook = currentBook.copy(summary = summary)
-                                bookViewModel.updateBook(updatedBook)
+                            if (summary != null) {
+                                bookViewModel.recordSummaryGenerated(currentBook, summary, captures.size)
+                            } else {
+                                summaryError = "まとめを作れませんでした。通信状態を確かめて、もう一度お試しください。"
                             }
                             isGeneratingSummary = false
                         }
                     },
+                    onSaveSummary = { book?.let { bookViewModel.saveSummary(it) } },
+                    onEditSummary = { text -> book?.let { bookViewModel.editSummary(it, text) } },
+                    onRateSummary = { rating -> book?.let { bookViewModel.rateSummary(it, rating) } },
                     onEditBook = { showEditDialog = true }
                 )
 

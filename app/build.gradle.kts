@@ -50,6 +50,11 @@ android {
         jvmTarget = "17"
     }
 
+    testOptions {
+        // Android framework calls (e.g. Log) return defaults in JVM unit tests
+        unitTests.isReturnDefaultValues = true
+    }
+
     buildFeatures {
         compose = true
         buildConfig = true

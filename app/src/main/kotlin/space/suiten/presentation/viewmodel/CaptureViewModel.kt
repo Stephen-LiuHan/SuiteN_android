@@ -6,6 +6,7 @@ import androidx.lifecycle.viewModelScope
 import space.suiten.core.service.AIService
 import space.suiten.core.service.ImageService
 import space.suiten.core.service.OCRService
+import space.suiten.domain.model.EmotionStamps
 import space.suiten.domain.model.AIStatus
 import space.suiten.domain.model.Capture
 import space.suiten.domain.model.ReadingSession
@@ -171,7 +172,7 @@ class CaptureViewModel(
                     id = UUID.randomUUID().toString(),
                     sessionId = sessionId,
                     imagePath = imagePath,
-                    emotion = emotions.firstOrNull(),
+                    emotion = EmotionStamps.encode(emotions),
                     userMemo = userMemo,
                     aiStatus = AIStatus.PENDING,
                     createdAt = Date(),
@@ -209,6 +210,15 @@ class CaptureViewModel(
      * - OCR text is immediately cleared after AI processing
      * - Only AI's abstracted analysis is saved
      */
+    /** Earlier reactions in the same book, so the AI can connect them. AI output only, never book text. */
+    private suspend fun loadPastReactions(capture: Capture): List<String> {
+        val bookId = captureRepository.getSessionById(capture.sessionId)?.bookId ?: return emptyList()
+        return captureRepository.getCapturesByBookId(bookId).first()
+            .filter { it.id != capture.id && it.createdAt.before(capture.createdAt) }
+            .sortedBy { it.createdAt }
+            .mapNotNull { aiRepository.getResultByCaptureId(it.id)?.draftSummary }
+    }
+
     suspend fun processWithAI(captureId: String): Boolean {
         var ocrText: String? = null // Scoped ONLY to this method
 
@@ -262,8 +272,8 @@ class CaptureViewModel(
             val (aiResult, nextActions) = aiService.processCapture(
                 ocrText = ocrText,
                 userMemo = capture.userMemo,
-                emotion = capture.emotion,
-                pastResults = emptyList() // TODO: Load past results if needed
+                emotionLabels = EmotionStamps.labels(capture.emotion),
+                pastReactions = loadPastReactions(capture)
             )
             android.util.Log.d("CaptureViewModel", "AI processing completed, result id: ${aiResult.id}")
 
@@ -370,6 +380,12 @@ class CaptureViewModel(
      */
     fun getCachedOCRText(captureId: String): String? {
         return ocrTextCache[captureId]
+    }
+
+    /** OCR text must not outlive the screen that needed it. */
+    override fun onCleared() {
+        ocrTextCache.clear()
+        super.onCleared()
     }
 
     /**

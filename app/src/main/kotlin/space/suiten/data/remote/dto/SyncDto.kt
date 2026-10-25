@@ -2,6 +2,23 @@ package space.suiten.data.remote.dto
 
 import com.google.gson.annotations.SerializedName
 
+/**
+ * The sync API uses Unix seconds; the local database stores milliseconds.
+ * Convert at this boundary only.
+ */
+object SyncTime {
+    private const val MILLIS_THRESHOLD = 100_000_000_000L
+
+    fun toApi(millis: Long): Long = millis / 1000
+
+    fun toApi(millis: Long?): Long? = millis?.let { toApi(it) }
+
+    /** Accepts milliseconds too, in case a value was stored before this conversion existed. */
+    fun fromApi(seconds: Long): Long = if (seconds > MILLIS_THRESHOLD) seconds else seconds * 1000
+
+    fun fromApi(seconds: Long?): Long? = seconds?.let { fromApi(it) }
+}
+
 // === Sync Request ===
 data class SyncRequest(
     @SerializedName("last_sync_at") val lastSyncAt: Long?,
@@ -32,7 +49,12 @@ data class BookSyncData(
     @SerializedName("author") val author: String?,
     @SerializedName("summary") val summary: String?,
     @SerializedName("created_at") val createdAt: Long,
-    @SerializedName("updated_at") val updatedAt: Long
+    @SerializedName("updated_at") val updatedAt: Long,
+    @SerializedName("summary_generated_at") val summaryGeneratedAt: Long? = null,
+    @SerializedName("summary_saved_at") val summarySavedAt: Long? = null,
+    @SerializedName("summary_edited_at") val summaryEditedAt: Long? = null,
+    @SerializedName("summary_helpfulness") val summaryHelpfulness: Int? = null,
+    @SerializedName("summary_capture_count") val summaryCaptureCount: Int? = null
 )
 
 data class ReadingSessionSyncData(
@@ -133,7 +155,13 @@ data class BookResponse(
     @SerializedName("summary") val summary: String?,
     @SerializedName("created_at") val createdAt: Long,
     @SerializedName("updated_at") val updatedAt: Long,
-    @SerializedName("deleted_at") val deletedAt: Long? = null
+    @SerializedName("deleted_at") val deletedAt: Long? = null,
+    @SerializedName("summary_generated_at") val summaryGeneratedAt: Long? = null,
+    @SerializedName("summary_saved_at") val summarySavedAt: Long? = null,
+    @SerializedName("summary_edited_at") val summaryEditedAt: Long? = null,
+    @SerializedName("summary_helpfulness") val summaryHelpfulness: Int? = null,
+    @SerializedName("summary_capture_count") val summaryCaptureCount: Int? = null,
+    @SerializedName("summary_completed_at") val summaryCompletedAt: Long? = null
 )
 
 data class SessionResponse(

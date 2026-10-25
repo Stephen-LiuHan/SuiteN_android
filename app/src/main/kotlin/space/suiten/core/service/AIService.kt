@@ -14,13 +14,14 @@ import java.util.UUID
  * AI Service for processing captures with Gemini AI
  *
  * PRIVACY GUARDRAILS:
- * - Validates AI output to ensure no original text reproduction
- * - Checks for forbidden phrases
- * - Enforces character limits
- * - Ensures user-centric language
- * - OCR text is NEVER stored - only passed temporarily for processing
+ * - OCR text is NEVER stored or logged - only passed temporarily for processing
+ * - Every output is checked by [AIGuardrails]; output that breaks a rule is regenerated
+ *   once with feedback, and replaced with a reader-only fallback if it still breaks one
+ * - Prompts follow SuiteN's belief that the answer is in the reader's head (see [AIPrompts])
  */
-class AIService {
+class AIService(
+    private val generate: (suspend (String) -> String)? = null
+) {
 
     private val gson = Gson()
 
@@ -49,142 +50,70 @@ class AIService {
     }
 
     companion object {
-        private const val MAX_SUMMARY_LENGTH = 400
-        private const val MAX_QUESTION_LENGTH = 100
-        private const val MAX_ACTION_DESCRIPTION_LENGTH = 100
-
-        // Forbidden phrases that indicate original text reproduction
-        private val FORBIDDEN_PHRASES = listOf(
-            "述べている",
-            "書かれている",
-            "記載されている",
-            "書いてある",
-            "説明している"
-        )
-
-        private const val SYSTEM_PROMPT = """
-あなたは読書アプリのAIアシスタントです。ユーザーが本の気になる箇所をキャプチャしました。
-あなたの役割は、キャプチャした内容から「本についての気づき」を整理・言語化することです。
-
-【あなたのタスク】
-ユーザーがキャプチャした本の内容を分析し、以下の観点で「気づき」をまとめてください：
-
-1. **この本が伝えようとしていること**
-   - 著者の主張やメッセージは何か
-   - どんな考え方・概念が紹介されているか
-
-2. **キーとなるアイデア**
-   - 核心となる考え方を自分の言葉で説明
-   - 重要なキーワードや用語の意味
-
-3. **なぜこの箇所が気になったのか**（ユーザーのメモや感情から推測）
-   - ユーザーにとっての意味や価値
-   - 既存の知識や経験との関連
-
-【draft_summaryの書き方】
-- 「この本では〜という考え方が紹介されています」のように、本の内容を客観的にまとめる
-- 著者の主張を自分の言葉で言い換えて説明する
-- ユーザーのメモがあれば、それと本の内容を関連づける
-- 具体的で実用的な気づきを提供する
-
-【良い例】
-「この箇所では『環境設計』という概念が紹介されています。習慣を身につけるには意志力に頼るのではなく、行動しやすい環境を先に整えることが重要という考え方です。例えば、運動習慣をつけたければ、寝室にトレーニングウェアを置いておくといった工夫が挙げられます。」
-
-【悪い例】
-- 「興味深い内容ですね」（抽象的すぎる）
-- 「〜しましょう」（アドバイスになっている）
-- 原文をそのまま引用する
-
-【著作権保護】
-- 原文をそのままコピーしない
-- 必ず自分の言葉で言い換える
-
-【出力形式】
-{
-  "draft_summary": "本についての気づきをまとめた文章（400文字以内）",
-  "deepening_question": "この気づきをさらに深めるための問いかけ（100文字以内）",
-  "next_actions": [
-    {"type": "dialog", "title": "AIと深掘り対話", "description": "この気づきについて深掘りする", "query": null, "link": null},
-    {"type": "books", "title": "関連書籍を探す", "description": "関連する本を探す", "query": "具体的な検索キーワード", "link": null}
-  ],
-  "topic_tags": ["本から抽出したキーワード1", "キーワード2", "キーワード3"]
-}
-
-topic_tagsには本の内容から抽出した具体的なキーワードを3〜5個設定してください。
-"""
+        /** First attempt plus one regeneration with feedback. */
+        private const val MAX_ATTEMPTS = 2
+        private const val MAX_NEXT_ACTIONS = 3
     }
 
-    data class AIRequest(
-        @SerializedName("ocr_text") val ocrText: String,
-        @SerializedName("user_memo") val userMemo: String?,
-        @SerializedName("emotion") val emotion: String?,
-        @SerializedName("past_results") val pastResults: List<String>
-    )
-
     data class AIResponse(
-        @SerializedName("draft_summary") val draftSummary: String,
-        @SerializedName("deepening_question") val deepeningQuestion: String,
-        @SerializedName("axis_options") val axisOptions: List<String> = emptyList(),
-        @SerializedName("next_actions") val nextActions: List<NextActionDto>,
-        @SerializedName("topic_tags") val topicTags: List<String>
+        @SerializedName("draft_summary") val draftSummary: String = "",
+        @SerializedName("deepening_question") val deepeningQuestion: String = "",
+        @SerializedName("next_actions") val nextActions: List<NextActionDto> = emptyList(),
+        @SerializedName("topic_tags") val topicTags: List<String> = emptyList()
     )
 
     data class NextActionDto(
-        val type: String,
-        val title: String,
-        val description: String,
-        val query: String?,
-        val link: String?
+        val type: String = "dialog",
+        val title: String = "",
+        val description: String = "",
+        val query: String? = null,
+        val link: String? = null
     )
+
+    private val hasModel: Boolean
+        get() = generate != null || BuildConfig.GEMINI_API_KEY.isNotEmpty()
+
+    private suspend fun callModel(prompt: String, chat: Boolean = false): String {
+        generate?.let { return it(prompt) }
+        val model = if (chat) chatModel else generativeModel
+        return model.generateContent(prompt).text ?: throw IllegalStateException("Empty response from Gemini")
+    }
 
     /**
      * Process capture with Gemini AI
      *
      * @param ocrText MEMORY ONLY - will not be stored. Can be null if OCR failed or no image.
      * @param userMemo User's memo
-     * @param emotion User's emotion
-     * @param pastResults Previous AI results for context
+     * @param emotionLabels Labels of the capture's emotion stamps, e.g. "疑問・共感"
+     * @param pastReactions Earlier reactions in the same book (AI output, never book text)
      * @return Pair of AIResult and NextActions
      */
     suspend fun processCapture(
         ocrText: String?,
         userMemo: String?,
-        emotion: String?,
-        pastResults: List<AIResult> = emptyList()
+        emotionLabels: String,
+        pastReactions: List<String> = emptyList()
     ): Pair<AIResult, List<NextAction>> {
-        val response = if (BuildConfig.GEMINI_API_KEY.isNotEmpty()) {
-            try {
-                android.util.Log.d("AIService", "Calling Gemini API with ocrText length: ${ocrText?.length ?: 0}")
-                callGeminiAPI(ocrText, userMemo, emotion, pastResults)
-            } catch (e: Exception) {
-                android.util.Log.e("AIService", "Gemini API call failed: ${e.message}", e)
-                // Fallback to mock if API fails
-                generateMockResponse(userMemo, emotion)
-            }
+        val response = if (hasModel) {
+            generateReaction(ocrText, userMemo, emotionLabels, pastReactions)
         } else {
-            android.util.Log.w("AIService", "No API key, using mock response")
-            // Use mock if no API key
-            generateMockResponse(userMemo, emotion)
+            android.util.Log.w("AIService", "No API key, using offline response")
+            fallbackResponse(emotionLabels, userMemo)
         }
 
-        // Validate response
-        validateAIResponse(response)
-
         val resultId = UUID.randomUUID().toString()
-        val captureId = UUID.randomUUID().toString()
-
         val aiResult = AIResult(
             id = resultId,
-            captureId = captureId,
+            captureId = UUID.randomUUID().toString(),
             draftSummary = response.draftSummary,
             deepeningQuestion = response.deepeningQuestion,
             axisSelected = null,
-            topicTags = response.topicTags,
+            topicTags = response.topicTags.take(5),
             createdAt = Date(),
             updatedAt = Date()
         )
 
-        val nextActions = response.nextActions.mapIndexed { index, dto ->
+        val nextActions = response.nextActions.take(MAX_NEXT_ACTIONS).mapIndexed { index, dto ->
             NextAction(
                 id = UUID.randomUUID().toString(),
                 aiResultId = resultId,
@@ -200,296 +129,108 @@ topic_tagsには本の内容から抽出した具体的なキーワードを3〜
         return Pair(aiResult, nextActions)
     }
 
-    /**
-     * Call Gemini API for processing
-     */
-    private suspend fun callGeminiAPI(
+    private suspend fun generateReaction(
         ocrText: String?,
         userMemo: String?,
-        emotion: String?,
-        pastResults: List<AIResult>
+        emotionLabels: String,
+        pastReactions: List<String>
     ): AIResponse {
-        val userPrompt = buildString {
-            appendLine("=== キャプチャ情報 ===")
-            appendLine()
-
-            // OCR text is the primary source for book insights
-            if (!ocrText.isNullOrBlank()) {
-                appendLine("【本の内容（キャプチャから抽出）】")
-                appendLine(ocrText)
-                appendLine()
+        var feedback: String? = null
+        repeat(MAX_ATTEMPTS) { attempt ->
+            val response = try {
+                val prompt = AIPrompts.buildReactionPrompt(ocrText, emotionLabels, userMemo, pastReactions, feedback)
+                gson.fromJson(AIPrompts.extractJson(callModel(prompt)), AIResponse::class.java)
+            } catch (e: Exception) {
+                android.util.Log.e("AIService", "Reaction generation failed: ${e.message}")
+                return fallbackResponse(emotionLabels, userMemo)
             }
-
-            appendLine("【ユーザーの反応】")
-            if (emotion != null) {
-                appendLine("感情: $emotion")
-            }
-            if (!userMemo.isNullOrBlank()) {
-                appendLine("メモ: $userMemo")
-            }
-            if (emotion == null && userMemo.isNullOrBlank()) {
-                appendLine("（反応の記録なし）")
-            }
-            appendLine()
-
-            appendLine("【依頼】")
-            if (!ocrText.isNullOrBlank()) {
-                appendLine("上記の本の内容から「気づき」を整理してください。")
-                appendLine("- この本が伝えようとしていることは何か")
-                appendLine("- キーとなるアイデアや概念は何か")
-                appendLine("- ユーザーのメモや感情があれば、それを踏まえて気づきをまとめてください")
-            } else if (!userMemo.isNullOrBlank()) {
-                appendLine("ユーザーのメモから、読書に関する気づきを整理してください。")
-            } else {
-                appendLine("ユーザーの感情から、読書体験についての気づきを提供してください。")
-            }
+            val violations = AIGuardrails.checkReaction(response.draftSummary, response.deepeningQuestion, ocrText)
+            if (violations.isEmpty()) return response
+            // Log rule kinds only; the text may contain book wording
+            android.util.Log.w("AIService", "Attempt ${attempt + 1} broke guardrails: ${violations.map { it.kind }}")
+            feedback = AIGuardrails.feedback(violations)
         }
-
-        val fullPrompt = "$SYSTEM_PROMPT\n\n$userPrompt"
-        android.util.Log.d("AIService", "Sending prompt to Gemini (length: ${fullPrompt.length})")
-
-        val response = generativeModel.generateContent(fullPrompt)
-        val responseText = response.text ?: throw Exception("Empty response from Gemini")
-        android.util.Log.d("AIService", "Received response from Gemini (length: ${responseText.length})")
-
-        // Extract JSON from response
-        val jsonText = extractJson(responseText)
-        return gson.fromJson(jsonText, AIResponse::class.java)
+        return fallbackResponse(emotionLabels, userMemo)
     }
 
-    /**
-     * Chat with AI for deep dive conversation
-     *
-     * @param context Previous AI result context
-     * @param userMessage User's message
-     * @return AI response message
-     */
-    suspend fun chat(context: AIResult, userMessage: String): String {
-        if (BuildConfig.GEMINI_API_KEY.isEmpty()) {
-            return generateMockChatResponse(userMessage)
-        }
-
-        return try {
-            val chatPrompt = buildString {
-                appendLine("あなたは読書アプリのAIアシスタントです。")
-                appendLine("ユーザーとの対話では、本の原文を引用せず、ユーザーの思考を深める質問や視点を提供してください。")
-                appendLine()
-                appendLine("【これまでの分析】")
-                appendLine("あなたの気づき: ${context.draftSummary}")
-                appendLine("深掘りの視点: ${context.deepeningQuestion}")
-                appendLine()
-                appendLine("【ユーザーのメッセージ】")
-                appendLine(userMessage)
-                appendLine()
-                appendLine("ユーザーの思考を深める返答をしてください。200文字以内で簡潔に。")
-            }
-
-            val response = chatModel.generateContent(chatPrompt)
-            response.text ?: "すみません、応答を生成できませんでした。"
-        } catch (e: Exception) {
-            generateMockChatResponse(userMessage)
-        }
-    }
-
-    /**
-     * Extract JSON from AI response
-     */
-    private fun extractJson(text: String): String {
-        // Try to find JSON in the response
-        val jsonStart = text.indexOf("{")
-        val jsonEnd = text.lastIndexOf("}") + 1
-
-        if (jsonStart >= 0 && jsonEnd > jsonStart) {
-            return text.substring(jsonStart, jsonEnd)
-        }
-
-        throw IllegalStateException("No valid JSON found in AI response")
-    }
-
-    /**
-     * Validate AI response against privacy and quality guardrails
-     */
-    private fun validateAIResponse(response: AIResponse) {
-        // Check summary length (warn only, don't fail)
-        if (response.draftSummary.length > MAX_SUMMARY_LENGTH) {
-            android.util.Log.w("AIService", "AI summary exceeds $MAX_SUMMARY_LENGTH characters: ${response.draftSummary.length}")
-        }
-
-        // Check question length (warn only, don't fail)
-        if (response.deepeningQuestion.length > MAX_QUESTION_LENGTH) {
-            android.util.Log.w("AIService", "AI question exceeds $MAX_QUESTION_LENGTH characters: ${response.deepeningQuestion.length}")
-        }
-
-        // Check for forbidden phrases - this is critical for copyright protection
-        val allText = response.draftSummary + " " + response.deepeningQuestion
-        FORBIDDEN_PHRASES.forEach { phrase ->
-            if (allText.contains(phrase)) {
-                android.util.Log.w("AIService", "AI output contains forbidden phrase: $phrase")
-                // Don't throw - let the response through but log the warning
-            }
-        }
-
-        // Validate action descriptions (warn only)
-        response.nextActions.forEach { action ->
-            if (action.description.length > MAX_ACTION_DESCRIPTION_LENGTH) {
-                android.util.Log.w("AIService", "Action description exceeds $MAX_ACTION_DESCRIPTION_LENGTH characters")
-            }
-        }
-    }
-
-    /**
-     * Mock AI response for testing (when API key is not set)
-     */
-    private fun generateMockResponse(userMemo: String?, emotion: String?): AIResponse {
-        val emotionText = emotion ?: "興味"
-        val memoContext = if (!userMemo.isNullOrBlank()) {
-            "メモ「$userMemo」から、この内容に関心を持っていることがわかります。"
-        } else {
-            "この箇所を保存したのは、何か気になる点があったからでしょう。"
-        }
-
+    private fun fallbackResponse(emotionLabels: String, userMemo: String?): AIResponse {
+        val (reaction, question) = AIPrompts.fallbackReaction(emotionLabels, userMemo)
+        val query = userMemo?.takeIf { it.isNotBlank() }?.take(30)
         return AIResponse(
-            draftSummary = "あなたは「$emotionText」という感情を抱きながら、この内容を読みました。$memoContext",
-            deepeningQuestion = "この内容で最も印象に残った点は何ですか？",
-            axisOptions = listOf("リスク", "成功率", "理由づけ", "概念"),
+            draftSummary = reaction,
+            deepeningQuestion = question,
             nextActions = listOf(
-                NextActionDto(
-                    type = "dialog",
-                    title = "AIと深掘り対話",
-                    description = "この内容についてさらに考えを深める",
-                    query = null,
-                    link = null
-                ),
-                NextActionDto(
-                    type = "books",
-                    title = "関連書籍を探す",
-                    description = "このテーマの本を探す",
-                    query = userMemo ?: "読書",
-                    link = null
-                ),
-                NextActionDto(
-                    type = "videos",
-                    title = "関連動画を探す",
-                    description = "このテーマの動画を探す",
-                    query = userMemo ?: "読書",
-                    link = null
-                )
+                NextActionDto("dialog", "AIと対話して深める", "この反応をもう少し言葉にする"),
+                NextActionDto("books", "関連書籍を探す", "同じテーマの本を探す", query),
+                NextActionDto("videos", "関連動画を探す", "同じテーマの動画を探す", query)
             ),
-            topicTags = listOf("読書", "気づき")
+            topicTags = emptyList()
         )
     }
 
     /**
-     * Mock chat response for testing
+     * Chat with AI for deep dive conversation. The AI asks rather than answers.
+     *
+     * @param context The capture's AI result
+     * @param userMessage User's message
+     * @return AI response message
      */
-    private fun generateMockChatResponse(userMessage: String): String {
-        return "なるほど、「$userMessage」について考えているんですね。その視点は興味深いです。もう少し具体的に、どのような場面でそう感じましたか？"
+    suspend fun chat(context: AIResult, userMessage: String): String {
+        if (!hasModel) return offlineChatReply()
+
+        var feedback: String? = null
+        repeat(MAX_ATTEMPTS) {
+            val reply = try {
+                val prompt = AIPrompts.buildChatPrompt(
+                    reaction = context.draftSummary,
+                    question = context.deepeningQuestion,
+                    axisLabel = AIPrompts.axisLabel(context.axisSelected),
+                    userMessage = userMessage,
+                    feedback = feedback
+                )
+                callModel(prompt, chat = true).trim()
+            } catch (e: Exception) {
+                return offlineChatReply()
+            }
+            val violations = AIGuardrails.checkChat(reply)
+            if (violations.isEmpty()) return reply
+            feedback = AIGuardrails.feedback(violations)
+        }
+        return offlineChatReply()
     }
 
+    private fun offlineChatReply(): String =
+        "そう考えたのですね。それは、あなたのどんな経験や状況から来ていると感じますか？"
+
     /**
-     * Generate a book summary based on all capture AI results
+     * Summarize one book by cutting across the reader's captures.
+     * Uses only the reader's own data (stamps, memos, reactions, chosen axes), never book text.
      *
-     * @param bookTitle The title of the book
-     * @param contentTypeName The type of content (本、動画、etc.)
-     * @param bookMemo User's memo about the book
-     * @param aiResults All AI results from captures for this book
-     * @return Summary of the user's reading impressions
+     * @return The formatted summary to store in books.summary
+     * @throws IllegalStateException when the AI fails or keeps breaking the rules, so that
+     *   a failure message is never saved as the reader's summary
      */
     suspend fun generateBookSummary(
         bookTitle: String,
         contentTypeName: String,
         bookMemo: String?,
-        aiResults: List<AIResult>
+        captures: List<BookSummaryCaptureInput>
     ): String {
-        if (aiResults.isEmpty()) {
-            return "まだキャプチャがありません。コンテンツを視聴しながら気になった箇所をキャプチャして、気づきを記録しましょう。"
+        require(captures.isNotEmpty()) { "A summary needs at least one capture" }
+
+        if (!hasModel) {
+            return AIPrompts.formatBookSummary(AIPrompts.offlineBookSummary(captures))
         }
 
-        if (BuildConfig.GEMINI_API_KEY.isEmpty()) {
-            return generateMockBookSummary(bookTitle, contentTypeName, aiResults)
+        var feedback: String? = null
+        repeat(MAX_ATTEMPTS) { attempt ->
+            val prompt = AIPrompts.buildBookSummaryPrompt(bookTitle, contentTypeName, bookMemo, captures, feedback)
+            val output = gson.fromJson(AIPrompts.extractJson(callModel(prompt)), BookSummaryOutput::class.java)
+            val violations = AIGuardrails.checkBookSummary(output)
+            if (violations.isEmpty()) return AIPrompts.formatBookSummary(output)
+            android.util.Log.w("AIService", "Summary attempt ${attempt + 1} broke guardrails: ${violations.map { it.kind }}")
+            feedback = AIGuardrails.feedback(violations)
         }
-
-        return try {
-            val prompt = buildBookSummaryPrompt(bookTitle, contentTypeName, bookMemo, aiResults)
-            android.util.Log.d("AIService", "Generating summary for: $bookTitle ($contentTypeName) with ${aiResults.size} captures")
-
-            val response = generativeModel.generateContent(prompt)
-            response.text ?: "感想の生成に失敗しました。"
-        } catch (e: Exception) {
-            android.util.Log.e("AIService", "Summary generation failed: ${e.message}", e)
-            generateMockBookSummary(bookTitle, contentTypeName, aiResults)
-        }
-    }
-
-    private fun buildBookSummaryPrompt(
-        bookTitle: String,
-        contentTypeName: String,
-        bookMemo: String?,
-        aiResults: List<AIResult>
-    ): String {
-        return buildString {
-            appendLine("あなたは学習・読書アプリのAIアシスタントです。")
-            appendLine("ユーザーが「$bookTitle」という${contentTypeName}を視聴し、複数の箇所をキャプチャしました。")
-
-            if (!bookMemo.isNullOrBlank()) {
-                appendLine()
-                appendLine("【ユーザーのメモ】")
-                appendLine(bookMemo)
-            }
-
-            appendLine()
-            appendLine("それぞれのキャプチャに対するAI分析結果を基に、ユーザーがこの${contentTypeName}から得た全体的な感想・学びをまとめてください。")
-            appendLine()
-            appendLine("【各キャプチャの分析結果】")
-
-            aiResults.forEachIndexed { index, result ->
-                appendLine()
-                appendLine("--- キャプチャ ${index + 1} ---")
-                appendLine("気づき: ${result.draftSummary}")
-                if (result.topicTags.isNotEmpty()) {
-                    appendLine("トピック: ${result.topicTags.joinToString(", ")}")
-                }
-            }
-
-            appendLine()
-            appendLine("【まとめ方の指示】")
-            appendLine("1. この${contentTypeName}全体を通してユーザーが何を学んだか・感じたかをまとめる")
-            appendLine("2. 共通するテーマやキーワードがあれば抽出する")
-            appendLine("3. ユーザーがこの${contentTypeName}から得た主な気づきを3〜5点で整理する")
-            appendLine("4. 最後に、この${contentTypeName}を視聴した全体的な感想を1〜2文でまとめる")
-            if (!bookMemo.isNullOrBlank()) {
-                appendLine("5. ユーザーのメモも考慮して、より個人的な感想を生成する")
-            }
-            appendLine()
-            appendLine("【禁止事項】")
-            appendLine("- 原文の引用")
-            appendLine("- 「〜しましょう」などのアドバイス")
-            appendLine("- 抽象的すぎる表現")
-            appendLine()
-            appendLine("400〜600文字程度で、読みやすくまとめてください。")
-        }
-    }
-
-    private fun generateMockBookSummary(bookTitle: String, contentTypeName: String, aiResults: List<AIResult>): String {
-        val topicSet = aiResults.flatMap { it.topicTags }.toSet().take(5)
-        val topicsText = if (topicSet.isNotEmpty()) {
-            "主なトピック: ${topicSet.joinToString("、")}"
-        } else {
-            ""
-        }
-
-        return buildString {
-            appendLine("「$bookTitle」（$contentTypeName）の記録")
-            appendLine()
-            appendLine("${aiResults.size}件のキャプチャから、以下のような気づきが得られました。")
-            appendLine()
-            aiResults.take(3).forEachIndexed { index, result ->
-                appendLine("${index + 1}. ${result.draftSummary.take(50)}...")
-            }
-            if (topicsText.isNotEmpty()) {
-                appendLine()
-                appendLine(topicsText)
-            }
-        }
+        throw IllegalStateException("The summary kept breaking the output rules")
     }
 }
